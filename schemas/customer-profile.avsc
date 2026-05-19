@@ -1,0 +1,27 @@
+{
+  "type": "record",
+  "namespace": "info.szikora.kafka.events",
+  "name": "CustomerProfile",
+  "fields": [
+    {
+      "name": "customerId",
+      "type": "string"
+    },
+    {
+      "name": "country",
+      "type": "string"
+    },
+    {
+      "name": "tier",
+      "type": {
+        "type": "enum",
+        "name": "Tier",
+        "symbols": [
+          "FREE",
+          "PRO",
+          "ENTERPRISE"
+        ]
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 package info.szikora.kafka.playground.producer;
 
-import info.szikora.kafka.playground.common.OrderPlaced;
+import info.szikora.kafka.events.OrderPlaced;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -31,7 +31,27 @@ public class OrderProducer {
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 
         // Throwaway for Day 3 — we'll send orderPlaced.toString(). Day 4 swaps in Avro.
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+            io.apicurio.registry.serde.avro.AvroKafkaSerializer.class);
+
+        // Where to find the registry
+        props.put(io.apicurio.registry.serde.SerdeConfig.REGISTRY_URL,
+            "http://localhost:8080/apis/registry/v2");
+
+        // Strategy for resolving the artifact ID from a record.
+        // TopicIdStrategy = "<topic>-value", which matches the subject "orders-placed-value" we already registered.
+        props.put(io.apicurio.registry.serde.SerdeConfig.ARTIFACT_RESOLVER_STRATEGY,
+            io.apicurio.registry.serde.strategy.TopicIdStrategy.class.getName());
+
+        // Auto-register the schema if missing. Useful in dev; turn OFF in prod.
+        props.put(io.apicurio.registry.serde.SerdeConfig.AUTO_REGISTER_ARTIFACT, "true");
+
+        // Confluent wire format: magic byte + 4-byte content ID prefix at the start of the
+        // value payload. Trades richer header-based Apicurio metadata for cross-language interop
+        // (kcat, confluent-kafka-python, ksqlDB all expect this).
+        props.put(io.apicurio.registry.serde.SerdeConfig.ENABLE_HEADERS, "false");
+        props.put(io.apicurio.registry.serde.SerdeConfig.ID_HANDLER,
+            "io.apicurio.registry.serde.Legacy4ByteIdHandler");
 
         // The headline setting. Producer is assigned a PID; each (topic, partition) write carries a monotonic sequence number.
         // The broker dedupes retries within a session. Without this, retries can produce duplicates and reorder messages.
@@ -55,14 +75,14 @@ public class OrderProducer {
 
     public void sendRecords() {
         String[] customers = {"alice", "bob", "carol", "david"};
-        try (KafkaProducer<String, String> kafkaProducer = new KafkaProducer<>(props)) {
+        try (KafkaProducer<String, OrderPlaced> kafkaProducer = new KafkaProducer<>(props)) {
             for (int i = 0; i < 10; i++) {
                 OrderPlaced orderPlaced = createOrderPlaced(customers[i % customers.length]);
                 RecordMetadata md = kafkaProducer.send(
-                        new ProducerRecord<>("orders-placed", orderPlaced.customerId(), orderPlaced.toString()))
+                        new ProducerRecord<>("orders-placed", orderPlaced.getCustomerId(), orderPlaced))
                     .get();
                 logger.info("topic={}, partition={}, offset={}, key={}",
-                    md.topic(), md.partition(), md.offset(), orderPlaced.customerId());
+                    md.topic(), md.partition(), md.offset(), orderPlaced.getCustomerId());
 
             }
         } catch (InterruptedException e) {

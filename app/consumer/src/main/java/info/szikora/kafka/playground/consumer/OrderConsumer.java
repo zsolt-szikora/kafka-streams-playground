@@ -1,5 +1,6 @@
 package info.szikora.kafka.playground.consumer;
 
+import info.szikora.kafka.events.OrderPlaced;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -20,7 +21,7 @@ public class OrderConsumer {
     private final Properties props = new Properties();
 
     private volatile boolean running = true;
-    private KafkaConsumer<String, String> consumer;
+    private KafkaConsumer<String, OrderPlaced> consumer;
 
     public OrderConsumer() {
         initProperties();
@@ -28,14 +29,19 @@ public class OrderConsumer {
     }
 
     public void readRecords() {
-        try (KafkaConsumer<String, String> c = new KafkaConsumer<>(props)) {
+        try (KafkaConsumer<String, OrderPlaced> c = new KafkaConsumer<>(props)) {
             this.consumer = c;
             c.subscribe(List.of("orders-placed"));
             while (running) {
-                ConsumerRecords<String, String> batch = c.poll(Duration.ofMillis(500));
-                for (ConsumerRecord<String, String> record : batch) {
-                    logger.info("key ={}, value={}, partition={}, offset={}",
-                        record.key(), record.value(), record.partition(), record.offset());
+                ConsumerRecords<String, OrderPlaced> batch = c.poll(Duration.ofMillis(500));
+                for (ConsumerRecord<String, OrderPlaced> record : batch) {
+                    logger.info("key={}, orderId={}, amount={}{}, placedAt={}, partition={}, offset={}",
+                        record.key(),
+                        record.value().getOrderId(),
+                        record.value().getAmountCents(),
+                        record.value().getCurrency(),
+                        record.value().getPlacedAt(),
+                        record.partition(), record.offset());
                 }
                 c.commitSync(); // block until offsets are persisted to __consumer_offsets
             }
@@ -54,8 +60,23 @@ public class OrderConsumer {
         // Symmetric with producer
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
 
-        // Symmetric — receiving back the toString() we sent. Day 4 swaps to Avro.
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        // Symmetric — receiving back the toString() we sent. On day 4 it was changed to AVRO.
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
+            io.apicurio.registry.serde.avro.AvroKafkaDeserializer.class);
+
+        props.put(io.apicurio.registry.serde.SerdeConfig.REGISTRY_URL,
+            "http://localhost:8080/apis/registry/v2");
+
+        // Critical: tell the deserializer to use the generated Java class (OrderPlaced)
+        // instead of a generic Map-like GenericRecord. Default is false (= GenericRecord).
+        props.put(io.apicurio.registry.serde.avro.AvroKafkaSerdeConfig.USE_SPECIFIC_AVRO_READER,
+            "true");
+
+        // Switch from header-based schema reference to Confluent wire format:
+        // magic byte + 4-byte content ID prefix at the start of the value payload.
+        props.put(io.apicurio.registry.serde.SerdeConfig.ENABLE_HEADERS, "false");
+        props.put(io.apicurio.registry.serde.SerdeConfig.ID_HANDLER,
+            "io.apicurio.registry.serde.Legacy4ByteIdHandler");
 
         // Consumer groups are the unit of horizontal scaling.
         // Two instances in the same group split partitions; two instances in different groups each get the full stream.

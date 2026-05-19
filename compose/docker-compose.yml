@@ -1,4 +1,3 @@
-
 volumes:
   kafka-1-data:
   kafka-2-data:
@@ -83,3 +82,21 @@ services:
       KAFKA_CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'   # any base64-encoded UUID
     volumes:
       - kafka-3-data:/var/lib/kafka/data
+
+  apicurio:
+    image: apicurio/apicurio-registry-mem:2.5.10.Final
+    container_name: apicurio
+    # The ccompat endpoint. TODO.md references http://localhost:8080/apis/ccompat/v7 in the Python snippet — that's Apicurio's
+    # Confluent-compatibility API. It's enabled by default in this image, so nothing extra to configure now, but worth knowing:
+    #  * the Java client will use Apicurio's native /apis/registry/v2, and
+    #  * the Python confluent-kafka client will use /apis/ccompat/v7. Same registry, two faces.
+    ports:
+      - "8080:8080"
+    environment:
+      QUARKUS_PROFILE: prod
+    # depends_on is start-order only, not health - it is just cosmetic here
+    # (The Confluent SR image would need it for its _schemas topic; Apicurio-mem stores state in heap.)
+    depends_on: # depends_on is start-order only, not health
+      - kafka-1
+      - kafka-2
+      - kafka-3

@@ -72,6 +72,30 @@ java -cp "consumer/target/classes:common/target/classes:$(./mvnw -pl consumer -q
 Note: you can gracefully terminate the consumer by pressing Ctrl+C. Once re-started, the producer won't process the once
 processed records, so you will need to run the producer to see the newer records being processed.
 
+### Run the Python Validator
+
+The Python validator subscribes to `orders-placed`, fetches the Avro schema from Apicurio via the Confluent-compatible
+endpoint (`/apis/ccompat/v7`), and asserts per-record invariants: `orderId` is present, the message key equals the
+record's `customerId`, and no `orderId` appears twice.
+
+One-time setup (creates a venv at `python/.venv` and installs `confluent-kafka[avro]` + `fastavro`):
+
+```shell
+python3 -m venv python/.venv
+source python/.venv/bin/activate
+pip install -r python/requirements.txt
+```
+Then, with the cluster + Apicurio up and the producer publishing records:
+
+```shell
+source python/.venv/bin/activate
+python python/output_validator.py
+```
+
+Each record prints one line: `OK partition=... offset=... key=... order=... amount=... HUF`. The script runs until
+Ctrl+C. If you see fewer lines than the producer sent, check that the `orders-placed-value` schema is registered in
+Apicurio — the deserializer needs to look it up via ccompat by the 4-byte content ID embedded in the message payload.
+
 ## Architecture Diagram
 
 ![Kafka pet project architecture: 3-broker KRaft cluster with producer, Streams app,

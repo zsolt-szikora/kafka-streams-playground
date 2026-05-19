@@ -19,6 +19,8 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>21</maven.compiler.release>
+        <avro.version>1.11.3</avro.version>
+        <apicurio.version>2.5.10.Final</apicurio.version>
     </properties>
 
     <dependencyManagement>
@@ -56,6 +58,19 @@
                 <version>1.5.32</version>
                 <scope>runtime</scope>
             </dependency>
+
+            <dependency>
+                <groupId>org.apache.avro</groupId>
+                <artifactId>avro</artifactId>
+                <version>${avro.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.apicurio</groupId>
+                <artifactId>apicurio-registry-serdes-avro-serde</artifactId>
+                <version>${apicurio.version}</version>
+            </dependency>
+
         </dependencies>
     </dependencyManagement>
 
@@ -69,13 +84,6 @@
                 </plugin>
             </plugins>
         </pluginManagement>
-
-        <plugins>
-            <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>exec-maven-plugin</artifactId>
-            </plugin>
-        </plugins>
     </build>
 
 </project>
