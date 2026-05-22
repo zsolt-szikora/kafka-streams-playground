@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "namespace": "info.szikora.kafka.events",
+  "name": "OrdersPerWindow",
+  "doc": "5-minute tumbling-window aggregate of orders, keyed by OrdersPerWindowKey. Repeats the key fields plus window bounds for downstream consumers that don't want to decode the Windowed<K> key wrapper.",
+  "fields": [
+    {"name": "customerId",       "type": "string"},
+    {"name": "tier",             "type": "string"},
+    {"name": "currency",         "type": "string"},
+    {"name": "windowStartMs",    "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "windowEndMs",      "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "orderCount",       "type": "long"},
+    {"name": "totalAmountCents", "type": "long"}
+  ]
+}

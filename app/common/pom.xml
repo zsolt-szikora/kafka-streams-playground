@@ -38,6 +38,9 @@
                         </goals>
                         <configuration>
                             <sourceDirectory>${project.basedir}/../../schemas</sourceDirectory>
+                            <imports>
+                                <import>${project.basedir}/../../schemas/tier.avsc</import>
+                            </imports>
                             <outputDirectory>${project.build.directory}/generated-sources/avro</outputDirectory>
 
                             <!-- Without stringType=String, Avro generates CharSequence fields and you'll spend the next

@@ -1,0 +1,6 @@
+{
+  "type": "enum",
+  "namespace": "info.szikora.kafka.events",
+  "name": "Tier",
+  "symbols": ["FREE", "PRO", "ENTERPRISE"]
+}

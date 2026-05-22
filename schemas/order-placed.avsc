@@ -3,29 +3,10 @@
   "namespace": "info.szikora.kafka.events",
   "name": "OrderPlaced",
   "fields": [
-    {
-      "name": "orderId",
-      "type": "string"
-    },
-    {
-      "name": "customerId",
-      "type": "string"
-    },
-    {
-      "name": "amountCents",
-      "type": "long"
-    },
-    {
-      "name": "currency",
-      "type": "string",
-      "default": "EUR"
-    },
-    {
-      "name": "placedAt",
-      "type": {
-        "type": "long",
-        "logicalType": "timestamp-millis"
-      }
-    }
+    {"name": "orderId",     "type": "string"},
+    {"name": "customerId",  "type": "string"},
+    {"name": "amountCents", "type": "long"},
+    {"name": "currency",    "type": "string", "default": "EUR"},
+    {"name": "placedAt",    "type": {"type": "long", "logicalType": "timestamp-millis"}}
   ]
 }

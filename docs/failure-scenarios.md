@@ -100,3 +100,161 @@ why a registry with FULL compatibility refuses it.
   level, with per-subject overrides only where stricter or looser is justified.
 
 <!-- TODO: ## 2. Cross-language Avro through a shared registry — embed running-java-consumer-and-python-validator-for-records.png + 2 sentences on the round-trip -->
+
+## 3. In-memory schema registry loses state on restart
+
+### Setup
+
+Day 4 chose `apicurio/apicurio-registry-mem` for simplicity. That variant keeps everything — schemas, the globalId counter, compatibility rules — in JVM heap. Day 5 restarted the cluster (for an unrelated broker-volume-path fix), which restarted the Apicurio container.
+
+### Failure
+
+The Streams app crashed deserializing records from `customer-profiles`:
+
+```
+ArtifactNotFoundException: No artifact with ID '11' in group 'null' was found.
+```
+
+The globalId in the error didn't exist in the current Apicurio session — even though the customer-profiles topic still had records that referenced it.
+
+### Diagnosis
+
+Apicurio's wire format prepends each record's value with `magic_byte + 4-byte globalId`. The deserializer reads the globalId off the wire and looks up the corresponding schema. With the `-mem` backend:
+
+- Schemas got assigned globalIds 1, 2, 3, … during the original session.
+- Topic records have those globalIds baked into their wire prefix.
+- On Apicurio restart, both the schemas *and the globalId counter* were wiped.
+- Re-registering produced new globalIds (5, 6, …), unrelated to the IDs in the topic data.
+- Those old globalIds were now dangling pointers to a registry session that no longer exists.
+
+### Fix
+
+Switch Apicurio to a persistence-backed variant. We chose `apicurio/apicurio-registry-kafkasql`, which uses a single-partition compacted Kafka topic (`kafkasql-journal`) on the existing cluster to persist all registry state.
+
+Required compose changes:
+
+```yaml
+apicurio:
+    image: apicurio/apicurio-registry-kafkasql:2.5.10.Final
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:19092,kafka-2:19092,kafka-3:19092
+      KAFKASQL_TOPIC_REPLICATION_FACTOR: 3
+```
+
+The `KAFKASQL_TOPIC_REPLICATION_FACTOR: 3` is required because our broker-default `min.insync.replicas=2` would otherwise block Apicurio's first write to the journal (default RF=1 fails to satisfy min.isr=2).
+
+### Production lessons
+
+- **Never use `-mem` for anything beyond a throwaway demo.** It creates a whole class of "weird 404s on globalId N" failures that are invisible until a restart, then suddenly visible across every consumer.
+- **The schema registry's persistence layer is itself critical infrastructure**, and earns the same durability contracts (RF=3, min.isr=2) as application data. `kafkasql` reuses the existing Kafka cluster's durability story; `sql` introduces a PostgreSQL dependency. Pick deliberately based on operational preferences.
+- **A persistent registry doesn't retroactively rescue already-written data with dead globalIds.** After migrating to kafkasql, the topic data still references the old globalIds. Recovery requires deleting + recreating the affected topics — or pre-registering schemas with the *same* globalIds, which Apicurio doesn't let you choose.
+- **kafkasql-journal is single-partition by design.** The registry needs strict total order across all instances; that requires one partition. Same reason `__cluster_metadata-0` is single-partition. Throughput doesn't matter — schema writes happen at deploy time.
+
+## 4. Pre-registered schemas don't match runtime canonical form
+
+### Setup
+
+Interview narrative we wanted: *"schemas are registered via CI, never by running apps with AUTO_REGISTER."* So we wrote `scripts/register-schemas.sh` to POST each `.avsc` from `/schemas/` to Apicurio, and set `AUTO_REGISTER_ARTIFACT=false` on the Streams app's serdes.
+
+### Failure
+
+The Streams app failed during state-store writes with:
+
+```
+ArtifactNotFoundException: No artifact with ID 'customer-profiles-value' in group 'null' was found.
+```
+
+— even though `customer-profiles-value` clearly existed in Apicurio (we'd just registered it). The error name is misleading: it actually means "no version of this artifact has matching content for the schema you're trying to look up."
+
+The schema content the serializer was looking for (visible in the cache-update log line):
+
+```json
+{"name":"customerId","type":{"type":"string","avro.java.string":"String"}}
+```
+
+The schema content the script *registered* (from raw `.avsc`):
+
+```json
+{"name":"customerId","type":"string"}
+```
+
+Different content → different hash → not found.
+
+### Diagnosis
+
+Two divergences between raw-`.avsc` form and the runtime canonical form Apicurio's Java client uses:
+
+1. **`avro.java.string` property injection.** The avro-maven-plugin, configured with `<stringType>String</stringType>`, generates Java classes whose embedded `SCHEMA$` constant carries `"avro.java.string":"String"` on every string field. The raw `.avsc` files don't. Avro's parsing-canonical-form computation keeps this property, so the hashes differ.
+2. **Named-type decomposition.** When the Apicurio Java client encounters a record schema that references a named type (e.g. `CustomerProfile` referencing the `Tier` enum), it decomposes the schema into *separate* Apicurio artifacts: one for `Tier` (artifact ID = fully-qualified `info.szikora.kafka.events.Tier`), one for `CustomerProfile` with a reference. The raw `.avsc` form inlines the enum.
+
+### Partial fix (option C in our exploration)
+
+For the named-type issue: split `customer-profile.avsc` into a separate `tier.avsc` + a reference-bearing `customer-profile.avsc`, register `Tier` first, then register `customer-profiles-value` using Apicurio's `application/create.extended+json` body shape with a `references` array. The avro-maven-plugin needs an `<imports>` element pointing at `tier.avsc` so it resolves the reference at compile time.
+
+The `avro.java.string` mismatch persists even after the split, because Avro's canonical form keeps that property and our script registers raw text.
+
+### Fix we ended up taking (pragmatic)
+
+Set `AUTO_REGISTER_ARTIFACT=true` on the Streams app's apicurioConfig, with an inline comment documenting the lesson. The runtime serializer registers schemas in their actual canonical form on first write; subsequent writes find them.
+
+### Production lessons
+
+- **Pre-registration only works if the registered content matches what the runtime actually computes.** Raw `.avsc` registration doesn't satisfy this for Avro's parsing-canonical-form.
+- **The proper fix is to extract schemas from compiled artifacts**, not from source `.avsc` files. A small build step that calls `SomeType.SCHEMA$.toString()` (or the equivalent canonical-form method) on every generated Avro class and writes the result to a JSON file gives you exactly-canonical schemas to register. That's what your CI pipeline should publish, not the raw .avsc.
+- **AUTO_REGISTER in dev, extract-from-compiled in prod** is a clean staged approach. Document the gap explicitly so AUTO_REGISTER doesn't get flipped on in prod under deadline pressure.
+- **Apicurio's named-type decomposition isn't a wart**, it's actually a useful property — it deduplicates shared types across many subjects (one `Tier` definition, referenced by N subjects). Confluent Schema Registry inlines instead, which is simpler but means N copies of the same `Tier` in the registry.
+
+## 5. Stream-table join: stale Kafka timestamps cause stream-side head-of-line dropping
+
+### Setup
+
+The orders-aggregator Streams app does a `KStream<orders-placed>.leftJoin(KTable<customer-profiles>)`. On a fresh aggregator start — wiped state dir + deleted consumer group — with both topics already populated, the join was supposed to enrich each order with the customer's tier.
+
+### Failure
+
+Every order — all 10, all customers known and seeded — got filtered out as "no profile":
+
+```
+WARN  OrdersAggregator - dropping order ... — no profile for customerId=alice
+WARN  OrdersAggregator - dropping order ... — no profile for customerId=bob
+... (10 of these) ...
+```
+
+A few seconds *after* the last dropped order, the state store *did* eventually contain all 4 profiles — but by then there were no orders left to look up against.
+
+### Diagnosis (after substantial misdirection)
+
+What looked like the cause at various points (all wrong):
+
+1. **State-store restoration is buggy.** The "End offset for changelog X initialized as 0" log lines while `kafka-get-offsets` showed end offsets clearly > 0 looked like a metadata staleness bug.
+2. **`REUSE_KTABLE_SOURCE_TOPICS` optimization is interfering.** Flipped `topology.optimization` from `OPTIMIZE` to `NO_OPTIMIZATION`. Same behavior.
+3. **`max.task.idle.ms=10000` isn't waiting.** It seemed like the stream side wasn't being held until the table side caught up.
+
+The actual mechanism — only obvious once we looked at the *Kafka timestamps* in the dropped-order logs:
+
+**Kafka Streams processes records across input topics in event-time order**, picking the next record by lowest Kafka timestamp (CreateTime, by default) across all input partitions of a task. The state store reflects "what Streams has processed so far," not "what the topic logically contains."
+
+In our run:
+
+- Orders were produced earlier in the session — Kafka CreateTime timestamps from then.
+- Profiles were re-seeded later, during the debugging — Kafka timestamps from minutes ago.
+- Streams processed in timestamp order → all 10 orders first (oldest timestamps), against an empty state store, all dropped → then the 4 profiles, populating the state store after the orders were gone.
+
+`max.task.idle.ms` didn't help because it only waits when a partition buffer is *empty*. Both topics had records buffered, so no idle wait was needed — Streams just picked the next record by timestamp.
+
+### Fix
+
+Re-produce orders so their Kafka timestamps are *newer* than the most recent profile timestamps. This flips the processing order: profiles first (oldest), state store populates, orders second, join hits matches.
+
+In practice: with the aggregator already running, just `./scripts/producer.sh` from another terminal. The aggregator had already processed the 4 profiles after the 10 stale orders (state store fully populated by the time we got to this point), so fresh orders arrived at a ready state store and produced 10 successful joins.
+
+### Production lessons
+
+- **KStream-KTable join semantics are "current state-store value at processing time."** It is *not* a historical "as-of" lookup. The compacted topic backing a KTable makes state-store rebuilding correct and bounded; it does not make the join time-traveling. The user pointed this out to me after I'd handwaved the wrong direction — important not to confuse "topic retains data" with "join sees historical state."
+- **Streams processes records in event-time order across all task inputs.** Backfill scenarios (or, in our case, accumulated stale producer runs) where the stream side has older timestamps than the table side will starve the table side — by the time the table catches up, the stream has been fully drained against an empty state store.
+- **Real-world mitigations**:
+  - **Custom TimestampExtractor on the table source**, using wall-clock or a "max(eventTime, now())" hybrid, so the table always counts as the freshest input and is processed first.
+  - **Versioned state stores** (KIP-695, Streams 3.5+) explicitly enable as-of-event-time lookups when business semantics actually require time-travel.
+  - **Order the producer/seeder timing** so the table side has older timestamps than the stream side. Brittle, but adequate for demos and for batch-replay scenarios you control.
+  - **`max.task.idle.ms` is necessary but not sufficient.** It handles "the table fetcher is briefly behind, give it a moment." It doesn't handle "both sides have records buffered but the stream side is older by hours."
+- **Symptom-vs-cause discipline:** the "end-offset reports 0 but the topic has records" was a red herring driven by Streams' own log-output framing, not by an actual offset-query bug. The real signal was *"the orders that got dropped have stamps from 6 hours ago, while profiles have stamps from 13 minutes ago."* Always read the record timestamps in failure logs first — they tell you the processing order Streams will pick.

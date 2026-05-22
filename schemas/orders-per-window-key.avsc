@@ -1,0 +1,11 @@
+{
+  "type": "record",
+  "namespace": "info.szikora.kafka.events",
+  "name": "OrdersPerWindowKey",
+  "doc": "Composite aggregation key for orders-per-window. Tier and currency are strings here rather than referencing the Tier enum on CustomerProfile so each .avsc compiles independently in the avro-maven-plugin pipeline.",
+  "fields": [
+    {"name": "customerId", "type": "string"},
+    {"name": "tier",       "type": "string", "doc": "FREE | PRO | ENTERPRISE — mirrors CustomerProfile.Tier"},
+    {"name": "currency",   "type": "string", "doc": "ISO 4217 code — mirrors OrderPlaced.currency"}
+  ]
+}

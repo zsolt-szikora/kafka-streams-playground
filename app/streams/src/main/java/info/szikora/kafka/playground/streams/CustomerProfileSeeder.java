@@ -1,6 +1,7 @@
-package info.szikora.kafka.playground.producer;
+package info.szikora.kafka.playground.streams;
 
-import info.szikora.kafka.events.OrderPlaced;
+import info.szikora.kafka.events.CustomerProfile;
+import info.szikora.kafka.events.Tier;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -9,17 +10,16 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Instant;
+import java.util.List;
 import java.util.Properties;
-import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
-public class OrderProducer {
-    private static final Logger logger = LoggerFactory.getLogger(OrderProducer.class);
+public class CustomerProfileSeeder {
+    private static final Logger logger = LoggerFactory.getLogger(CustomerProfileSeeder.class);
 
     private final Properties props = new Properties();
 
-    public OrderProducer() {
+    public CustomerProfileSeeder() {
         initProperties();
     }
 
@@ -30,16 +30,18 @@ public class OrderProducer {
         // Keys are customerId strings
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 
-        // Throwaway for Day 3 — we'll send orderPlaced.toString(). Day 4 swaps in Avro.
+        // Value serializer from the apicurio serde registry
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
             io.apicurio.registry.serde.avro.AvroKafkaSerializer.class);
 
         // Where to find the registry
-        props.put(io.apicurio.registry.serde.SerdeConfig.REGISTRY_URL, "http://localhost:8080/apis/registry/v2");
+        props.put(io.apicurio.registry.serde.SerdeConfig.REGISTRY_URL,
+            "http://localhost:8080/apis/registry/v2");
 
         // Strategy for resolving the artifact ID from a record.
         // TopicIdStrategy = "<topic>-value", which matches the subject "orders-placed-value" we already registered.
-        props.put(io.apicurio.registry.serde.SerdeConfig.ARTIFACT_RESOLVER_STRATEGY, io.apicurio.registry.serde.strategy.TopicIdStrategy.class.getName());
+        props.put(io.apicurio.registry.serde.SerdeConfig.ARTIFACT_RESOLVER_STRATEGY,
+            io.apicurio.registry.serde.strategy.TopicIdStrategy.class.getName());
 
         // Auto-register the schema if missing. Useful in dev; turn OFF in prod.
         props.put(io.apicurio.registry.serde.SerdeConfig.AUTO_REGISTER_ARTIFACT, "true");
@@ -48,7 +50,8 @@ public class OrderProducer {
         // value payload. Trades richer header-based Apicurio metadata for cross-language interop
         // (kcat, confluent-kafka-python, ksqlDB all expect this).
         props.put(io.apicurio.registry.serde.SerdeConfig.ENABLE_HEADERS, "false");
-        props.put(io.apicurio.registry.serde.SerdeConfig.ID_HANDLER, "io.apicurio.registry.serde.Legacy4ByteIdHandler");
+        props.put(io.apicurio.registry.serde.SerdeConfig.ID_HANDLER,
+            "io.apicurio.registry.serde.Legacy4ByteIdHandler");
 
         // The headline setting. Producer is assigned a PID; each (topic, partition) write carries a monotonic sequence number.
         // The broker dedupes retries within a session. Without this, retries can produce duplicates and reorder messages.
@@ -70,29 +73,27 @@ public class OrderProducer {
     }
 
 
-    public void sendRecords() {
-        String[] customers = {"alice", "bob", "carol", "david"};
-        // Rotate currency independently of customer so the (customer, tier, currency, window) aggregation
-        // in the Streams app gets non-trivial cardinality on the currency dimension.
-        String[] currencies = {"HUF", "EUR", "USD"};
-        try (KafkaProducer<String, OrderPlaced> kafkaProducer = new KafkaProducer<>(props)) {
-            for (int i = 0; i < 10; i++) {
-                OrderPlaced orderPlaced = createOrderPlaced(
-                    customers[i % customers.length],
-                    currencies[i % currencies.length]);
+    public void seedRecords() {
+        List<CustomerProfile> customerProfiles = List.of(
+            new CustomerProfile("alice", "HU", Tier.FREE),
+            new CustomerProfile("bob", "HU", Tier.PRO),
+            new CustomerProfile("carol", "FR", Tier.PRO),
+            new CustomerProfile("david", "US", Tier.ENTERPRISE)
+        );
+
+        try (KafkaProducer<String, CustomerProfile> kafkaProducer = new KafkaProducer<>(props)) {
+            for (var customerProfile : customerProfiles) {
                 RecordMetadata md = kafkaProducer.send(
-                        new ProducerRecord<>("orders-placed", orderPlaced.getCustomerId(), orderPlaced))
+                        new ProducerRecord<>("customer-profiles", customerProfile.getCustomerId(), customerProfile))
                     .get();
                 logger.info("topic={}, partition={}, offset={}, key={}",
-                    md.topic(), md.partition(), md.offset(), orderPlaced.getCustomerId());
-
+                    md.topic(), md.partition(), md.offset(), customerProfile.getCustomerId());
             }
         } catch (InterruptedException e) {
             logger.error("Interrupted while sending records", e);
             //  Why: InterruptedException clears the interrupt flag when thrown. If you swallow it without re-setting, any upstream code that's polling the interrupt flag
             //  (Thread.interrupted(), executors, cancellation logic) loses the signal that someone asked the thread to stop. This is the classic Java
-            //  concurrency bug — the kind interviewers ask about specifically. For a one-shot main it doesn't matter functionally,
-            //  but the muscle memory of "always re-interrupt" is worth having before the interview.
+            //  concurrency bug.
             Thread.currentThread().interrupt();
         } catch (ExecutionException e) {
             logger.error("Failed to send records cause: ", e.getCause());
@@ -100,14 +101,8 @@ public class OrderProducer {
 
     }
 
-    private OrderPlaced createOrderPlaced(String customerId, String currency) {
-        var orderId = UUID.randomUUID().toString();
-        return new OrderPlaced(orderId, customerId, 4242L, currency, Instant.now());
-    }
-
-
     public static void main(String[] args) {
-        OrderProducer orderProducer = new OrderProducer();
-        orderProducer.sendRecords();
+        CustomerProfileSeeder customerProfileSeeder = new CustomerProfileSeeder();
+        customerProfileSeeder.seedRecords();
     }
 }
