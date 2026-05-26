@@ -52,6 +52,8 @@ public class CustomerProfileSeeder {
         props.put(io.apicurio.registry.serde.SerdeConfig.ENABLE_HEADERS, "false");
         props.put(io.apicurio.registry.serde.SerdeConfig.ID_HANDLER,
             "io.apicurio.registry.serde.Legacy4ByteIdHandler");
+        // Embed contentId (not globalId) so the Confluent-compat ccompat endpoint resolves the wire ID correctly.
+        props.put(io.apicurio.registry.serde.SerdeConfig.USE_ID, "contentId");
 
         // The headline setting. Producer is assigned a PID; each (topic, partition) write carries a monotonic sequence number.
         // The broker dedupes retries within a session. Without this, retries can produce duplicates and reorder messages.

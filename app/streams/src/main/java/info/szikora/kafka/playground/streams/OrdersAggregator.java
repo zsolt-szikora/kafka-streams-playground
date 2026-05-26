@@ -9,14 +9,13 @@ import io.apicurio.registry.serde.avro.AvroKafkaSerializer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.StreamsBuilder;
-import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.*;
 import org.apache.kafka.streams.kstream.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -65,6 +64,11 @@ public class OrdersAggregator {
         map.put(io.apicurio.registry.serde.SerdeConfig.REGISTRY_URL, "http://localhost:8080/apis/registry/v2");
         map.put(io.apicurio.registry.serde.SerdeConfig.ENABLE_HEADERS, "false");
         map.put(io.apicurio.registry.serde.SerdeConfig.ID_HANDLER, "io.apicurio.registry.serde.Legacy4ByteIdHandler");
+        // Embed the contentId (not the default globalId) in the wire prefix. Apicurio's ccompat endpoint —
+        // which confluent-kafka-python resolves against — looks schemas up by contentId. globalId and contentId
+        // coincide early but drift apart after register/delete churn, which broke cross-language reads. See
+        // docs/failure-scenarios.md.
+        map.put(io.apicurio.registry.serde.SerdeConfig.USE_ID, "contentId");
         map.put(io.apicurio.registry.serde.avro.AvroKafkaSerdeConfig.USE_SPECIFIC_AVRO_READER, "true");
 
         // Pragmatic fallback for the demo: the pre-registered schemas via scripts/register-schemas.sh don't match the
@@ -145,8 +149,32 @@ public class OrdersAggregator {
                 return true;
             })
             .selectKey((cid, enriched) -> new OrdersPerWindowKey(cid, enriched.getTier(), enriched.getCurrency()))
-            .foreach((k, v) ->
-                log.info("Composite key: {}, Placeholder aggregate-value: {}", k, v));
+            .groupByKey(Grouped.with(ordersPerWindowKeySerde, ordersPerWindowSerde))
+            .windowedBy(TimeWindows.ofSizeWithNoGrace(Duration.ofMinutes(5)))
+            .aggregate(
+                // initializer
+                () -> new OrdersPerWindow("", "", "", Instant.EPOCH, Instant.EPOCH, 0L, 0L),
+                //aggregator
+                (OrdersPerWindowKey key, OrdersPerWindow value, OrdersPerWindow agg) -> {
+                    agg.setCustomerId(key.getCustomerId());
+                    agg.setTier(key.getTier());
+                    agg.setCurrency(key.getCurrency());
+                    agg.setOrderCount(agg.getOrderCount() + value.getOrderCount());
+                    agg.setTotalAmountCents(agg.getTotalAmountCents() + value.getTotalAmountCents());
+                    return agg;
+                },
+                Materialized.with(ordersPerWindowKeySerde, ordersPerWindowSerde))
+            .toStream()
+            .map((windowedKey, agg) -> {
+                agg.setWindowStartMs(Instant.ofEpochMilli(windowedKey.window().start()));
+                agg.setWindowEndMs(Instant.ofEpochMilli(windowedKey.window().end()));
+                return new KeyValue<>(windowedKey.key(), agg);
+            })
+            .to("orders-per-window", Produced.with(ordersPerWindowKeySerde, ordersPerWindowSerde));
+
+//            .selectKey((cid, enriched) -> new OrdersPerWindowKey(cid, enriched.getTier(), enriched.getCurrency()))
+//            .foreach((k, v) ->
+//                log.info("Composite key: {}, Placeholder aggregate-value: {}", k, v));
 
 
         return builder.build(props);

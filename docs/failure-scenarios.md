@@ -258,3 +258,41 @@ In practice: with the aggregator already running, just `./scripts/producer.sh` f
   - **Order the producer/seeder timing** so the table side has older timestamps than the stream side. Brittle, but adequate for demos and for batch-replay scenarios you control.
   - **`max.task.idle.ms` is necessary but not sufficient.** It handles "the table fetcher is briefly behind, give it a moment." It doesn't handle "both sides have records buffered but the stream side is older by hours."
 - **Symptom-vs-cause discipline:** the "end-offset reports 0 but the topic has records" was a red herring driven by Streams' own log-output framing, not by an actual offset-query bug. The real signal was *"the orders that got dropped have stamps from 6 hours ago, while profiles have stamps from 13 minutes ago."* Always read the record timestamps in failure logs first — they tell you the processing order Streams will pick.
+
+## 6. Apicurio globalId vs ccompat contentId: cross-language reads break after schema churn
+
+### Setup
+
+The pipeline writes Avro via Apicurio's Java serdes (`ENABLE_HEADERS=false` + `Legacy4ByteIdHandler`, i.e. the Confluent-style 4-byte-ID wire format). The Python validator reads via confluent-kafka-python against Apicurio's Confluent-compat endpoint (`/apis/ccompat/v7`). On Day 4 this round-trip worked. On Day 5, reading the new `orders-per-window` topic, the Python validator crashed:
+
+```
+EOFError   (fastavro _read.read_long, inside read_record)
+```
+
+### Diagnosis
+
+The key bytes on `orders-per-window` decoded *by hand* to a perfectly valid 3-field `OrdersPerWindowKey` (`00 | 00 00 00 12 | 06 "bob" 06 "PRO" 06 "..."`). So the payload was fine. The problem was the **embedded schema ID = 18**:
+
+- `curl .../apis/registry/v2/ids/globalIds/18` → `OrdersPerWindowKey` (3 fields) ✓ — the key is stamped with its correct **globalId**.
+- `curl .../apis/ccompat/v7/schemas/ids/18` → `OrdersPerWindow` (7 fields) ✗ — ccompat resolves `18` as a **contentId**, landing on a different schema.
+
+Decoding 3-field key bytes with the 7-field schema reads customerId/tier/currency, then EOFs reaching for `windowStartMs`.
+
+Root cause: **Apicurio maintains two independent ID sequences.** `globalId` is a monotonic counter bumped by every registration (including of since-deleted artifacts); `contentId` is assigned per unique schema content. The `Legacy4ByteIdHandler` embeds the **globalId** in the wire prefix by default, but the ccompat endpoint — which every Confluent client speaks — resolves its `id` as the **contentId**. Early in the project (few schemas, no deletions) `globalId N == contentId N`, so the mismatch was invisible and Day 4 worked *by coincidence*. After a day of register/delete/re-register churn (kafkasql migration, the reference split, AUTO_REGISTER creating canonical-form duplicates), the two sequences drifted apart and the coincidence broke.
+
+### Fix
+
+Configure every Apicurio serde to embed the **contentId** instead of the globalId, so the wire ID matches what ccompat resolves:
+
+```java
+props.put(io.apicurio.registry.serde.SerdeConfig.USE_ID, "contentId");
+```
+
+Applied to all three serde configs (producer, seeder, Streams app) so the whole pipeline is consistent. Because this changes the wire format, all existing topic data (stamped with globalId) had to be wiped and repopulated, including the Streams internal repartition/changelog topics. After the reset, keys carried `contentId` and the Python validator decoded both key and value cleanly.
+
+### Production lessons
+
+- **`Legacy4ByteIdHandler` (globalId) + a Confluent client (contentId) is a latent landmine.** It works until the first artifact delete causes the two ID sequences to diverge, then every cross-language read fails. If you write with Apicurio serdes and read with Confluent clients, set `USE_ID=contentId` from day one.
+- **"Works in the demo" is not "works."** The Day 4 success was correct-by-coincidence — aligned IDs masked a real config gap. Worth distrusting any integration that only ever ran against a freshly-seeded registry.
+- **Two debugging tools made this tractable:** (1) hand-decoding the Avro wire prefix (`magic | 4-byte id | zigzag-length-prefixed fields`) proved the *payload* was correct and isolated the fault to the ID; (2) querying the same numeric ID through *both* the native (`/ids/globalIds/N`) and ccompat (`/schemas/ids/N`) endpoints and getting *different schemas back* was the smoking gun.
+- **Confluent Schema Registry doesn't have this split** — it has a single schema-ID space — which is one concrete reason a team standardizing on Confluent clients might prefer CSR over Apicurio, or at least standardize the `USE_ID` setting cluster-wide.
