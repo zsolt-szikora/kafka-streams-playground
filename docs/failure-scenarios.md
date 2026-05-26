@@ -296,3 +296,80 @@ Applied to all three serde configs (producer, seeder, Streams app) so the whole 
 - **"Works in the demo" is not "works."** The Day 4 success was correct-by-coincidence — aligned IDs masked a real config gap. Worth distrusting any integration that only ever ran against a freshly-seeded registry.
 - **Two debugging tools made this tractable:** (1) hand-decoding the Avro wire prefix (`magic | 4-byte id | zigzag-length-prefixed fields`) proved the *payload* was correct and isolated the fault to the ID; (2) querying the same numeric ID through *both* the native (`/ids/globalIds/N`) and ccompat (`/schemas/ids/N`) endpoints and getting *different schemas back* was the smoking gun.
 - **Confluent Schema Registry doesn't have this split** — it has a single schema-ID space — which is one concrete reason a team standardizing on Confluent clients might prefer CSR over Apicurio, or at least standardize the `USE_ID` setting cluster-wide.
+
+## 7. EOS v2: internal-topic replication factor vs min.insync.replicas, and benign cold-start changelog noise
+
+### Setup
+
+Day 5's last task: flip the orders-aggregator to exactly-once.
+
+```java
+props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
+props.put(StreamsConfig.REPLICATION_FACTOR_CONFIG, 3);
+```
+
+The topology didn't change at all — EOS is purely a runtime concern. The second line is the one that matters here. We did a full reset first (wiped data topics + all `orders-aggregator-v1-*` internal topics + state dir + consumer group), so the very first run had to *create* the internal changelog/repartition topics from scratch.
+
+### The latent failure we avoided (why `REPLICATION_FACTOR_CONFIG=3` is load-bearing)
+
+Enabling EOS forces the internal producer to `acks=all` (`acks = -1` in the producer config dump) — non-negotiable, because a transaction can't be durable otherwise. Our brokers run `min.insync.replicas=2`. But Streams' internal topics — the `aggregate` changelog, the `selectKey`/`groupByKey` repartition topic — default to **`replication.factor=1`** unless overridden.
+
+Chain that produces the failure:
+
+```
+RF=1  +  acks=all  +  min.insync.replicas=2
+  → the partition can never reach 2 in-sync replicas
+  → every produce to that changelog fails: NOT_ENOUGH_REPLICAS
+  → the app dies on startup (or first commit)
+```
+
+Setting `REPLICATION_FACTOR_CONFIG=3` makes the internal topics match the data topics' durability and clears the ISR floor. Verified after startup:
+
+```shell
+kafka-topics.sh --bootstrap-server localhost:9092 --describe \
+  --topic orders-aggregator-v1-KSTREAM-AGGREGATE-STATE-STORE-0000000007-changelog
+# ReplicationFactor: 3   Configs: min.insync.replicas=2,cleanup.policy=compact,delete,retention.ms=86700000
+#   Partition: 0  Leader: 2  Replicas: 2,3,1  Isr: 2,3,1
+#   ... (all 6 partitions: full ISR 1,2,3) ...
+```
+
+Aside worth noting: the changelog's `cleanup.policy=compact,delete` (not plain `compact`) and `retention.ms=86700000`. A **windowed** store's changelog ages out dead windows — `300000` (the 5-min window) + `86400000` (the default `windowstore.changelog.additional.retention.ms`, 1 day) = `86700000`. Streams sized that retention from the window definition. A non-windowed KTable changelog would be `compact` only, retained forever.
+
+### What *looked* like a failure but wasn't (cold-start noise)
+
+On the fresh-reset first run, before the internal topics existed, the log threw a wall of alarming-looking errors:
+
+```
+ERROR PartitionLeaderStrategy - Received unknown topic error for topic
+  orders-aggregator-v1-...-STATE-STORE-0000000001-changelog
+  org.apache.kafka.common.errors.UnknownTopicOrPartitionException
+
+INFO  StreamsPartitionAssignor - Failed to retrieve all end offsets for changelogs,
+  and hence could not calculate the per-task lag; this is not a fatal error but would
+  cause the assignor to fallback to a naive algorithm
+
+WARN  ClientState - Task 1_0 had endOffsetSum=-3 smaller than offsetSum=0 ...
+  This probably means the task is corrupted, which in turn indicates that it will
+  need to restore from scratch if it gets assigned.
+```
+
+None of these are problems:
+
+- The assignor queries each changelog's **end offset** to compute per-task lag (input to the sticky, stateful task-assignment algorithm). On a fresh reset the changelog topics don't exist yet → the query throws `UnknownTopicOrPartitionException` → the assignor explicitly logs *"not a fatal error"* and falls back to a lag-unaware assignment.
+- `endOffsetSum=-3` — the `-3` is the **sentinel for "topic doesn't exist"** (three changelog partitions × the unknown marker). Streams reads "can't determine state" as "treat as corrupt → restore from scratch," which on a nonexistent topic means restore **0 records**.
+- A followup rebalance fires, the internal topics get auto-created (at RF=3), and every task logs `Finished restoring ... with a total number of 0 records` → `State transition from PARTITIONS_ASSIGNED to RUNNING`.
+
+The tell that it's all benign: **every task ends `Restored and ready to run`**, and the app reaches `RUNNING`. The same warnings on a *warm* restart (topics exist, state present) would mean genuine corruption.
+
+### Fix
+
+- The latent failure: `REPLICATION_FACTOR_CONFIG=3` (above). The real fix.
+- The cold-start noise: no fix needed — recognize it. Confirm `RUNNING` + every task `Restored and ready to run` + `Finished restoring ... 0 records`.
+
+### Production lessons
+
+- **EOS forces `acks=all` on internal producers, so internal-topic RF must satisfy `min.insync.replicas` or transactions can't commit.** `replication.factor` defaults to 1; either set `StreamsConfig.REPLICATION_FACTOR_CONFIG` explicitly (we did) or raise the broker's `default.replication.factor`. This is *the* classic EOS-enablement gotcha — the topology compiles, the demo "starts," and then the first commit storms `NOT_ENOUGH_REPLICAS`.
+- **`endOffsetSum=-3` + "task corrupted" on a first run after a reset is expected, not alarming.** The signal that distinguishes real corruption from cold-start noise is whether tasks reach `Restored and ready to run` and the client transitions to `RUNNING`. Real corruption recurs on a warm restart; cold-start noise happens once, on the run that creates the topics.
+- **EOS auto-sets `isolation.level=read_committed` on the consumers** (visible in both consumer config dumps). That's *why* exactly-once composes across a multi-stage topology: each stage refuses to read another stage's uncommitted/aborted output. You don't set it; Streams does.
+- **`commit.interval.ms` drops from 30 000 to 100 ms under EOS.** Transactional commits are more expensive, so Streams trades throughput for latency to keep the transaction window small. Tunable if you'd rather amortize commit cost over larger batches at the price of end-to-end latency.
+- **`transactional.id` is derived deterministically** (`<application.id>-<...>-<n>`), which is what lets the broker **fence a zombie instance**: a restarted/duplicated StreamThread claiming the same transactional.id bumps the producer epoch and locks out the stale one. Deterministic IDs are the mechanism behind EOS surviving rebalances and crashes.

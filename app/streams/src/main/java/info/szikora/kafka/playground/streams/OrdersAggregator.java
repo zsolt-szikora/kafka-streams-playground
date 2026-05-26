@@ -56,6 +56,24 @@ public class OrdersAggregator {
         // In case of a massive or frequently changing customers_config KTable we would need some time before the KTable
         props.put(StreamsConfig.MAX_TASK_IDLE_MS_CONFIG, 10_000L);
 
+        // It makes Streams wrap each task's "consume → process → produce → commit offsets" cycle in a single Kafka
+        // transaction using the producer's transactional API.  Either all of it commits atomically (output records
+        // + the input offsets, written to the consumer-offsets topic inside the same transaction) or
+        //  none of it does.
+        //  Note: The _v2 variant uses a single producer per StreamThread (instead of producer-per-task like the original
+        //  exactly_once), so it scales with partitions far better.
+        props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
+
+        //  - EOS forces the internal producer to acks=all (non-negotiable — a transaction can't be durable otherwise).
+        //  - Your brokers have min.insync.replicas=2.
+        //  - Streams' internal topics (the aggregate changelog, the repartition topic from selectKey) are created by
+        //  Streams itself. The default replication.factor for them is 1 unless you override it.
+        //  - RF=1 + acks=all + min.insync.replicas=2 → the partition can never have 2 in-sync replicas → every produce to that changelog fails with NOT_ENOUGH_REPLICAS, and
+        //  the app dies on startup.
+        //
+        //  Setting it to 3 makes the internal topics match your data topics' durability and satisfies the ISR floor.
+        props.put(StreamsConfig.REPLICATION_FACTOR_CONFIG, 3);
+
         return props;
     }
 
