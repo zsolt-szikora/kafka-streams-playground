@@ -1,5 +1,7 @@
 # Kafka Pet Project
 
+![CI](https://github.com/zsolt-szikora/kafka-streams-playground/actions/workflows/ci.yml/badge.svg)
+
 ## Project Goal
 
 Build a small but production-shaped Kafka pipeline that demonstrates broker-level understanding, not just client-API
