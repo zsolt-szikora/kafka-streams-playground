@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: kafka-dashboards
+    type: file
+    editable: false          # provisioned = read-only in UI; edit the JSON in git instead
+    options:
+      path: /etc/grafana/provisioning/dashboards

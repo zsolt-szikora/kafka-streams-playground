@@ -1,0 +1,8 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus          # pinned so provisioned dashboards reference a stable UID across recreates
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

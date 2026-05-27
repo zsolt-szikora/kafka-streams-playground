@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: kafka-brokers
+    static_configs:
+      - targets:
+          - kafka-1:5556
+          - kafka-2:5556
+          - kafka-3:5556

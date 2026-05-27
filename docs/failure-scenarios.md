@@ -373,3 +373,47 @@ The tell that it's all benign: **every task ends `Restored and ready to run`**, 
 - **EOS auto-sets `isolation.level=read_committed` on the consumers** (visible in both consumer config dumps). That's *why* exactly-once composes across a multi-stage topology: each stage refuses to read another stage's uncommitted/aborted output. You don't set it; Streams does.
 - **`commit.interval.ms` drops from 30 000 to 100 ms under EOS.** Transactional commits are more expensive, so Streams trades throughput for latency to keep the transaction window small. Tunable if you'd rather amortize commit cost over larger batches at the price of end-to-end latency.
 - **`transactional.id` is derived deterministically** (`<application.id>-<...>-<n>`), which is what lets the broker **fence a zombie instance**: a restarted/duplicated StreamThread claiming the same transactional.id bumps the producer epoch and locks out the stale one. Deterministic IDs are the mechanism behind EOS surviving rebalances and crashes.
+
+## 8. Single-broker loss: under-replicated partitions spike and self-heal (the observability drill)
+
+### Setup
+
+Day 6 brought up the observability stack: a Prometheus JMX exporter as a **javaagent** in each broker JVM (`KAFKA_OPTS=-javaagent:...=5556:/opt/jmx/kafka-jmx.yml`), Prometheus scraping all three on `:5556`, and a hand-rolled Grafana dashboard ("Kafka Brokers — Golden Signals") with four panels: under-replicated partitions, request-handler idle, p99 request latency, messages-in/sec. All topics are RF=3 with `min.insync.replicas=2`. The drill: kill a broker, watch the cluster degrade and recover on our own dashboard, and confirm the durability contract.
+
+### What we did and observed
+
+**Baseline:** `UnderReplicatedPartitions` = 0 on all brokers; every partition `Isr: 1,2,3`.
+
+**Kill** — `docker stop kafka-2`:
+
+- Panel 1 stepped from 0 to a plateau of **~65 on each surviving broker** (kafka-1 and kafka-3); kafka-2's series stopped.
+- `kafka-topics --describe` showed every partition shrink to **`Isr: 1,3`** (2 members), and leadership **fail off broker 2** (e.g. `orders-placed-2` went `Leader: 2 → 3`, `orders-placed-3` went `2 → 1`).
+- `./scripts/producer.sh` **succeeded** — writes continued with one broker down.
+
+**Heal** — `docker start kafka-2`:
+
+- Panel 1 decayed back to **0** as broker 2 refetched the missed records and the controller re-added it to each ISR — the classic "mesa" shape, spike then decay.
+- ISR reformed to `Isr: 1,3,2`; **preferred-leader election** (`auto.leader.rebalance.enable`, default on) restored broker 2 as leader of its preferred partitions (2 and 3). Cluster-wide `--under-replicated-partitions` count back to 0.
+
+![broker-kill-urp-mesa.png](broker-kill-urp-mesa.png)
+
+### Sub-finding: the metrics javaagent breaks in-container CLI tools
+
+Mid-drill, `docker exec kafka-1 kafka-topics.sh ...` crashed with:
+
+```
+Failed to start Prometheus JMX Exporter
+java.net.BindException: Address in use
+        at io.prometheus.jmx.JavaAgent.premain(JavaAgent.java:62)
+```
+
+Cause: the javaagent is set in **`KAFKA_OPTS`**, which `kafka-run-class.sh` applies to *every* Kafka JVM in the container — not just the broker, but every CLI tool. So `kafka-topics.sh` tried to start its own agent on `:5556`, which the broker already owns → `BindException` → the agent's `premain` throws → the CLI JVM aborts before running. The broker itself is unaffected (it bound `:5556` first at startup). Fix: blank the var for one-off commands — `docker exec -e KAFKA_OPTS= kafka-1 /opt/kafka/bin/kafka-topics.sh ...`.
+
+### Production lessons
+
+- **`UnderReplicatedPartitions` is the single most important broker-health metric**, and it's *per-broker*: each broker counts the under-replicated partitions **it leads**. Sum across brokers for the cluster total (we saw ~65 + ~65 ≈ 130), or read per-broker to see which broker carries the at-risk leadership. Sustained nonzero = a replica is down or a follower can't keep up.
+- **Most of the under-replicated count during an outage is Kafka's own internal topics.** Our user topics contribute 6 partitions each; the ~130 total was dominated by `__consumer_offsets` (50) and `__transaction_state` (50), both RF=3. That's expected — and is exactly why those internal topics carry the same durability as data.
+- **RF=3 + `min.insync.replicas=2` tolerates exactly one broker loss for writes.** With 2 surviving in-sync replicas, `acks=all` is still satisfiable, so producers keep going. Kill a *second* broker and the same writes block with `NOT_ENOUGH_REPLICAS` — `min.insync.replicas` is a **durability floor**, not a high-availability setting; the availability you get from it is a side effect of the replica count, not the floor.
+- **Recovery is automatic and observable.** A returning broker re-fetches from the current leader, rejoins each ISR, and preferred-leader election rebalances leadership back. The spike-then-decay curve is the visual proof the cluster self-heals without operator action.
+- **A metrics javaagent in shared `KAFKA_OPTS` is convenient but leaks into in-container tooling.** Either scope it to the server start command only, or make `-e KAFKA_OPTS=` muscle memory for any in-container `kafka-*.sh` invocation. (Host-run clients are unaffected — they never see the container's env.)
+- **JMX is the universal substrate.** This entire drill was driven off broker MBeans translated by the javaagent — the same MBeans Cloudera Manager and SMM read. The collection mechanism differs across tools; the metrics don't.
