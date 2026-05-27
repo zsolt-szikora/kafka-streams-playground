@@ -41,5 +41,7 @@ build/
 
 ### Python ###
 python/.venv
+python/__pycache__/
+
 ### JMX exporter agent (fetched via scripts/fetch-jmx-agent.sh) ###
 compose/jmx/*.jar
