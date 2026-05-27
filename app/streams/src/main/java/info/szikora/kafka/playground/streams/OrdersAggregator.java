@@ -100,7 +100,11 @@ public class OrdersAggregator {
     }
 
     public void start() {
-        Topology topology = createTopology_1_WindowedAggregation();
+        Topology topology = createTopology_1_WindowedAggregation(
+            avroSerde(false),  // orders-placed value
+            avroSerde(false),  // customer-profiles value (KTable source)
+            avroSerde(true),   // OrdersPerWindowKey  (rekey + state + output key)
+            avroSerde(false)); // OrdersPerWindow     (aggregate + state + output value)
 
         KafkaStreams streams = new KafkaStreams(topology, props);
         CountDownLatch latch = new CountDownLatch(1);
@@ -126,15 +130,18 @@ public class OrdersAggregator {
         return builder.build(props);
     }
 
-    private Topology createTopology_1_WindowedAggregation() {
+    Topology createTopology_1_WindowedAggregation(Serde<OrderPlaced> orderSerde,
+                                                  Serde<CustomerProfile> customerProfileSerde,
+                                                  Serde<OrdersPerWindowKey> ordersPerWindowKeySerde,
+                                                  Serde<OrdersPerWindow> ordersPerWindowSerde) {
 
-        // "input value" serdes (Streams only read them)
-        Serde<OrderPlaced> orderSerde = avroSerde(false); // for reading the values from `orders-placed` topic
-        Serde<CustomerProfile> customerProfileSerde = avroSerde(false); // for reading the KTable source
-
-        // "output and materialized state" serdes (Streams reads and writes them)
-        Serde<OrdersPerWindowKey> ordersPerWindowKeySerde = avroSerde(true); // for the rekey, the materialized state, the output topic key
-        Serde<OrdersPerWindow> ordersPerWindowSerde = avroSerde(false); // for the aggregate value, the materialized state, the output topic value
+//        // "input value" serdes (Streams only read them)
+//        Serde<OrderPlaced> orderSerde = avroSerde(false); // for reading the values from `orders-placed` topic
+//        Serde<CustomerProfile> customerProfileSerde = avroSerde(false); // for reading the KTable source
+//
+//        // "output and materialized state" serdes (Streams reads and writes them)
+//        Serde<OrdersPerWindowKey> ordersPerWindowKeySerde = avroSerde(true); // for the rekey, the materialized state, the output topic key
+//        Serde<OrdersPerWindow> ordersPerWindowSerde = avroSerde(false); // for the aggregate value, the materialized state, the output topic value
 
         StreamsBuilder builder = new StreamsBuilder();
         KStream<String, OrderPlaced> orders = builder.stream("orders-placed", Consumed.with(Serdes.String(), orderSerde));
