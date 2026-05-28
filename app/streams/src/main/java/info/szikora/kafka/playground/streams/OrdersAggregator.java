@@ -134,15 +134,6 @@ public class OrdersAggregator {
                                                   Serde<CustomerProfile> customerProfileSerde,
                                                   Serde<OrdersPerWindowKey> ordersPerWindowKeySerde,
                                                   Serde<OrdersPerWindow> ordersPerWindowSerde) {
-
-//        // "input value" serdes (Streams only read them)
-//        Serde<OrderPlaced> orderSerde = avroSerde(false); // for reading the values from `orders-placed` topic
-//        Serde<CustomerProfile> customerProfileSerde = avroSerde(false); // for reading the KTable source
-//
-//        // "output and materialized state" serdes (Streams reads and writes them)
-//        Serde<OrdersPerWindowKey> ordersPerWindowKeySerde = avroSerde(true); // for the rekey, the materialized state, the output topic key
-//        Serde<OrdersPerWindow> ordersPerWindowSerde = avroSerde(false); // for the aggregate value, the materialized state, the output topic value
-
         StreamsBuilder builder = new StreamsBuilder();
         KStream<String, OrderPlaced> orders = builder.stream("orders-placed", Consumed.with(Serdes.String(), orderSerde));
 
@@ -196,10 +187,6 @@ public class OrdersAggregator {
                 return new KeyValue<>(windowedKey.key(), agg);
             })
             .to("orders-per-window", Produced.with(ordersPerWindowKeySerde, ordersPerWindowSerde));
-
-//            .selectKey((cid, enriched) -> new OrdersPerWindowKey(cid, enriched.getTier(), enriched.getCurrency()))
-//            .foreach((k, v) ->
-//                log.info("Composite key: {}, Placeholder aggregate-value: {}", k, v));
 
 
         return builder.build(props);

@@ -1,6 +1,6 @@
 # Kafka Pet Project
 
-![CI](https://github.com/zsolt-szikora/kafka-streams-playground/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/zsolt-szikora/kafka-streams-playground/actions/workflows/ci.yml/badge.svg)](https://github.com/zsolt-szikora/kafka-streams-playground/actions/workflows/ci.yml)
 
 ## Project Goal
 

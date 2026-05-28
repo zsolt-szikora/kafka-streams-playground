@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="740" viewBox="0 0 680 560" font-family="Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="770" viewBox="0 0 680 570" font-family="Arial, sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M2 1L8 5L2 9" fill="none" stroke="#444" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -38,68 +38,67 @@
 
   <!-- Kafka cluster container (purple) -->
   <g>
-    <rect x="40" y="170" width="600" height="140" rx="14" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.8"/>
+    <rect x="40" y="170" width="600" height="170" rx="14" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.8"/>
     <text class="th" x="340" y="195" text-anchor="middle" dominant-baseline="central" fill="#3C3489">Kafka cluster (KRaft mode)</text>
   </g>
 
-  <!-- Brokers (blue) -->
+  <!-- Brokers (blue), each with an inset JMX agent (amber) running inside the broker JVM -->
   <g>
-    <rect x="80" y="220" width="150" height="70" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.8"/>
-    <text class="th" x="155" y="244" text-anchor="middle" dominant-baseline="central" fill="#0C447C">broker-1</text>
-    <text class="ts" x="155" y="262" text-anchor="middle" dominant-baseline="central" fill="#185FA5">controller + broker</text>
-    <text class="ts" x="155" y="278" text-anchor="middle" dominant-baseline="central" fill="#185FA5">9092, JMX 9101</text>
+    <rect x="80" y="220" width="150" height="95" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.8"/>
+    <text class="th" x="155" y="240" text-anchor="middle" dominant-baseline="central" fill="#0C447C">broker-1</text>
+    <text class="ts" x="155" y="258" text-anchor="middle" dominant-baseline="central" fill="#185FA5">controller + broker</text>
+    <text class="ts" x="155" y="274" text-anchor="middle" dominant-baseline="central" fill="#185FA5">client :9092</text>
+    <rect x="90" y="284" width="130" height="24" rx="6" fill="#FAC775" stroke="#854F0B" stroke-width="0.8"/>
+    <text class="ts" x="155" y="296" text-anchor="middle" dominant-baseline="central" fill="#412402">JMX agent → :5556</text>
   </g>
 
   <g>
-    <rect x="265" y="220" width="150" height="70" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.8"/>
-    <text class="th" x="340" y="244" text-anchor="middle" dominant-baseline="central" fill="#0C447C">broker-2</text>
-    <text class="ts" x="340" y="262" text-anchor="middle" dominant-baseline="central" fill="#185FA5">controller + broker</text>
-    <text class="ts" x="340" y="278" text-anchor="middle" dominant-baseline="central" fill="#185FA5">9093, JMX 9102</text>
+    <rect x="265" y="220" width="150" height="95" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.8"/>
+    <text class="th" x="340" y="240" text-anchor="middle" dominant-baseline="central" fill="#0C447C">broker-2</text>
+    <text class="ts" x="340" y="258" text-anchor="middle" dominant-baseline="central" fill="#185FA5">controller + broker</text>
+    <text class="ts" x="340" y="274" text-anchor="middle" dominant-baseline="central" fill="#185FA5">client :9094</text>
+    <rect x="275" y="284" width="130" height="24" rx="6" fill="#FAC775" stroke="#854F0B" stroke-width="0.8"/>
+    <text class="ts" x="340" y="296" text-anchor="middle" dominant-baseline="central" fill="#412402">JMX agent → :5556</text>
   </g>
 
   <g>
-    <rect x="450" y="220" width="150" height="70" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.8"/>
-    <text class="th" x="525" y="244" text-anchor="middle" dominant-baseline="central" fill="#0C447C">broker-3</text>
-    <text class="ts" x="525" y="262" text-anchor="middle" dominant-baseline="central" fill="#185FA5">controller + broker</text>
-    <text class="ts" x="525" y="278" text-anchor="middle" dominant-baseline="central" fill="#185FA5">9094, JMX 9103</text>
+    <rect x="450" y="220" width="150" height="95" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.8"/>
+    <text class="th" x="525" y="240" text-anchor="middle" dominant-baseline="central" fill="#0C447C">broker-3</text>
+    <text class="ts" x="525" y="258" text-anchor="middle" dominant-baseline="central" fill="#185FA5">controller + broker</text>
+    <text class="ts" x="525" y="274" text-anchor="middle" dominant-baseline="central" fill="#185FA5">client :9096</text>
+    <rect x="460" y="284" width="130" height="24" rx="6" fill="#FAC775" stroke="#854F0B" stroke-width="0.8"/>
+    <text class="ts" x="525" y="296" text-anchor="middle" dominant-baseline="central" fill="#412402">JMX agent → :5556</text>
   </g>
 
   <!-- Schema Registry (coral) -->
   <g>
-    <rect x="40" y="340" width="180" height="56" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.8"/>
-    <text class="th" x="130" y="362" text-anchor="middle" dominant-baseline="central" fill="#712B13">Schema Registry</text>
-    <text class="ts" x="130" y="380" text-anchor="middle" dominant-baseline="central" fill="#993C1D">Apicurio, Avro schemas</text>
+    <rect x="40" y="370" width="180" height="56" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.8"/>
+    <text class="th" x="130" y="392" text-anchor="middle" dominant-baseline="central" fill="#712B13">Schema Registry</text>
+    <text class="ts" x="130" y="410" text-anchor="middle" dominant-baseline="central" fill="#993C1D">Apicurio, Avro schemas</text>
   </g>
 
-  <line x1="130" y1="310" x2="130" y2="340" class="arr" marker-end="url(#arrow)"/>
+  <line x1="130" y1="340" x2="130" y2="370" class="arr" marker-end="url(#arrow)"/>
 
   <!-- Observability stack container (amber) -->
   <g>
-    <rect x="250" y="340" width="390" height="180" rx="14" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.8"/>
-    <text class="th" x="445" y="364" text-anchor="middle" dominant-baseline="central" fill="#633806">Observability stack</text>
+    <rect x="250" y="370" width="390" height="170" rx="14" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.8"/>
+    <text class="th" x="445" y="394" text-anchor="middle" dominant-baseline="central" fill="#633806">Observability stack</text>
   </g>
 
   <g>
-    <rect x="270" y="386" width="160" height="56" rx="8" fill="#FAC775" stroke="#854F0B" stroke-width="0.8"/>
-    <text class="th" x="350" y="408" text-anchor="middle" dominant-baseline="central" fill="#412402">JMX exporter</text>
-    <text class="ts" x="350" y="426" text-anchor="middle" dominant-baseline="central" fill="#633806">per-broker sidecar</text>
+    <rect x="365" y="416" width="160" height="56" rx="8" fill="#FAC775" stroke="#854F0B" stroke-width="0.8"/>
+    <text class="th" x="445" y="438" text-anchor="middle" dominant-baseline="central" fill="#412402">Prometheus</text>
+    <text class="ts" x="445" y="456" text-anchor="middle" dominant-baseline="central" fill="#633806">scrapes brokers :5556</text>
   </g>
 
   <g>
-    <rect x="460" y="386" width="160" height="56" rx="8" fill="#FAC775" stroke="#854F0B" stroke-width="0.8"/>
-    <text class="th" x="540" y="408" text-anchor="middle" dominant-baseline="central" fill="#412402">Prometheus</text>
-    <text class="ts" x="540" y="426" text-anchor="middle" dominant-baseline="central" fill="#633806">scrapes JMX exporters</text>
+    <rect x="365" y="486" width="160" height="48" rx="8" fill="#FAC775" stroke="#854F0B" stroke-width="0.8"/>
+    <text class="th" x="445" y="510" text-anchor="middle" dominant-baseline="central" fill="#412402">Grafana</text>
   </g>
 
-  <g>
-    <rect x="365" y="456" width="160" height="48" rx="8" fill="#FAC775" stroke="#854F0B" stroke-width="0.8"/>
-    <text class="th" x="445" y="480" text-anchor="middle" dominant-baseline="central" fill="#412402">Grafana</text>
-  </g>
+  <!-- Internal arrow Prometheus -> Grafana -->
+  <line x1="445" y1="472" x2="445" y2="486" class="arr" marker-end="url(#arrow)"/>
 
-  <!-- Internal arrows in observability stack -->
-  <line x1="430" y1="414" x2="460" y2="414" class="arr" marker-end="url(#arrow)"/>
-  <line x1="540" y1="442" x2="475" y2="456" class="arr" marker-end="url(#arrow)"/>
-
-  <!-- Arrow from brokers to JMX exporter -->
-  <line x1="340" y1="310" x2="340" y2="386" class="arr" marker-end="url(#arrow)"/>
+  <!-- Arrow from brokers (JMX agents inside) to Prometheus -->
+  <line x1="445" y1="340" x2="445" y2="416" class="arr" marker-end="url(#arrow)"/>
 </svg>
